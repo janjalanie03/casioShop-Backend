@@ -1,0 +1,12 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+const base=process.env.TEST_BASE_URL;const email=process.env.TEST_CUSTOMER_EMAIL;const password=process.env.TEST_CUSTOMER_PASSWORD;
+const opts={skip:!base?'Set TEST_BASE_URL to run live HTTP integration tests':false};
+const call=async(path,{method='GET',body,token,headers={}}={})=>{const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{}),...headers},...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,json:r.status===204?{}:await r.json()}};
+test('health endpoint returns envelope',opts,async()=>{const r=await call('/health');assert.equal(r.status,200);assert.equal(r.json.success,true)});
+test('catalog categories available',opts,async()=>{const r=await call('/categories');assert.equal(r.status,200);assert.ok(Array.isArray(r.json.data))});
+test('catalog pagination',opts,async()=>{const r=await call('/products?page=1&limit=2');assert.equal(r.status,200);assert.ok(r.json.data.length<=2)});
+test('admin without token forbidden by authentication',opts,async()=>{const r=await call('/admin/dashboard');assert.equal(r.status,401)});
+test('invalid cart quantity rejected', {...opts,skip:!(base&&email&&password)},async()=>{const login=await call('/auth/login',{method:'POST',body:{email,password}});assert.equal(login.status,200);const r=await call('/cart/items',{method:'POST',token:login.json.data.access_token,body:{product_id:'11111111-1111-4111-8111-111111111111',quantity:-9}});assert.equal(r.status,422)});
+test('forged webhook rejected',opts,async()=>{const r=await call('/payments/maya/webhook',{method:'POST',body:{id:'fake',paymentStatus:'PAYMENT_SUCCESS'}});assert.equal(r.status,401)});
+test('nonexistent watch not accepted',opts,async()=>{const r=await call('/products/11111111-1111-4111-8111-111111111111');assert.equal(r.status,404)});
+test('checkout requires a token',opts,async()=>{const r=await call('/checkout',{method:'POST',body:{}});assert.equal(r.status,401)});
