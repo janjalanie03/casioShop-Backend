@@ -13,7 +13,18 @@ const money=z.number().finite().nonnegative().max(99999999);
 const ship=z.object({recipient:z.string().min(2).max(120),phone:z.string().min(7).max(25),address:z.string().min(8).max(250),city:z.string().min(2).max(80),province:z.string().min(2).max(80),postal_code:z.string().min(4).max(12)}).strict();
 const productSchema=z.object({sku:z.string().min(2).max(60),name:z.string().min(2).max(150),description:z.string().max(3000).default(''),category_id:uuid,price:money,stock:z.number().int().min(0),active:z.boolean().default(true),image_url:z.string().url().nullable().optional(),model_number:z.string().max(100).nullable().optional(),series:z.string().max(100).nullable().optional(),movement:z.enum(['Quartz','Digital','Solar','Automatic']).nullable().optional(),water_resistance_m:z.number().int().min(0).default(0),strap_material:z.string().max(80).nullable().optional(),warranty_months:z.number().int().min(0).max(120).default(12)}).strict();
 const couponSchema=z.object({code:z.string().min(3).max(40),type:z.enum(['percent','fixed']),value:z.number().positive(),minimum_spend:money.default(0),max_uses:z.number().int().positive().nullable().optional(),per_customer_limit:z.number().int().positive().default(1),expires_at:z.string().datetime({offset:true}).nullable().optional(),active:z.boolean().default(true)}).strict().refine(x=>x.type!=='percent'||x.value<=100);
-const dbError=(error)=>{if(error)fail(500,'DATABASE_ERROR','Database operation failed')};
+const dbError = (error) => {
+  if (error) {
+    console.error("Supabase database error:", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint
+    });
+
+    fail(500, "DATABASE_ERROR", "Database operation failed");
+  }
+};
 const selectOrder=async(id)=>{
  const order=result(await db.from('orders').select('*,order_items(*),order_status_history(*)').eq('id',id).maybeSingle());return order;
 };
