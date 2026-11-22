@@ -104,21 +104,54 @@ Available watch catalog:
 ${JSON.stringify(catalog)}
 `;
 
-    let response;
+    
+let response;
 
-    try {
-      response = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || "gemini-3.5-flash-lite",
-        contents: instructions,
-        config: {
-          responseMimeType: "application/json",
+const model = process.env.GEMINI_MODEL ||
+  "gemini-3.5-flash-lite";
+
+for (let attempt = 1; attempt <= 3; attempt++) {
+  try {
+    response = await ai.models.generateContent({
+      model,
+      contents: instructions,
+      config: {
+        responseMimeType: "application/json",
+      },
+    });
+
+    break;
+  } catch (error) {
+    console.error(
+      `Gemini attempt ${attempt} failed:`,
+      error.message
+    );
+
+    // Retry only temporary service overload errors.
+    const isOverloaded =
+      Number(error.status || error.code) === 503 ||
+      /"code"\s*:\s*503/.test(error.message || "");
+
+    if (!isOverloaded || attempt === 3) {
+      return res.status(503).json({
+        success: false,
+        error: {
+          code: "AI_UNAVAILABLE",
+          message:
+            "The AI assistant is temporarily busy. " +
+            "Please try again later or browse our watches.",
         },
+        requestId: req.id,
       });
-    } catch (error) {
-      console.error("Gemini API error:", error.message);
-      fail(503, "AI_UNAVAILABLE",
-        "AI recommendations are temporarily unavailable.");
     }
+
+    // Increasing delays: 1 second, then 2 seconds.
+    await new Promise((resolve) =>
+      setTimeout(resolve, 1000 * 2 ** (attempt - 1))
+    );
+  }
+}
+
 
     let recommendation;
 
