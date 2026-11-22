@@ -1,0 +1,1 @@
+DO NOT run schema.sql on an existing database. If you already executed the previous COD SQL, run only 02_cod_hardening.sql from SQL Editor. The SQL uses CREATE OR REPLACE and IF NOT EXISTS where possible. Review any existing order statuses before applying.

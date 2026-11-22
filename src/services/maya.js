@@ -11,4 +11,4 @@ export class MayaProvider extends PaymentProvider {
 }
 export class DisabledPaymentProvider extends PaymentProvider {async createCheckout(){fail(503,'PAYMENTS_DISABLED','Payments disabled')}async getPayment(){fail(503,'PAYMENTS_DISABLED','Payments disabled')}}
 export const paymentProviderFactory = type => type==='maya'?new MayaProvider():new DisabledPaymentProvider();
-export const maya=paymentProviderFactory('maya');
+export const maya=env.mayaPublic&&env.mayaSecret?paymentProviderFactory('maya'):new DisabledPaymentProvider();

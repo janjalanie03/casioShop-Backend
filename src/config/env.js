@@ -1,5 +1,5 @@
 import 'dotenv/config';
-const required = ['SUPABASE_URL','SUPABASE_PUBLISHABLE_KEY','SUPABASE_SECRET_KEY','MAYA_PUBLIC_KEY','MAYA_SECRET_KEY'];
+const required = ['SUPABASE_URL','SUPABASE_PUBLISHABLE_KEY','SUPABASE_SECRET_KEY',];
 for (const key of required) if (!process.env[key]) throw new Error(`Missing environment variable: ${key}`);
 export const env = {
   port: Number(process.env.PORT || 4000), nodeEnv: process.env.NODE_ENV || 'development',

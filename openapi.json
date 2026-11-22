@@ -2985,6 +2985,132 @@
           }
         }
       }
+    },
+    "/profile": {
+      "get": {
+        "summary": "Get my profile",
+        "description": "Authenticated user profile from Supabase.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      },
+      "patch": {
+        "summary": "Update my profile",
+        "description": "Update own full_name, phone, address, city, province, postal_code and HTTPS photo_url. Cannot change role.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/checkout/cod": {
+      "post": {
+        "summary": "Place Cash on Delivery order",
+        "description": "Authenticated checkout; requires Idempotency-Key header and shipping JSON. Stores real pending_cod order, reserves stock and clears cart atomically.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/orders/{id}/cancel-cod": {
+      "post": {
+        "summary": "Cancel pending COD order",
+        "description": "Only the owning customer may cancel before order processing.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/store-analytics": {
+      "get": {
+        "summary": "Store analytics",
+        "description": "Admin only. Collected revenue excludes uncollected COD.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/admin/orders/{id}/collect-cod": {
+      "post": {
+        "summary": "Record actual COD collection",
+        "description": "Admin only. Accepts receipt_number after actual delivery and payment. Creates unique receipt audit entry.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        },
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ]
+      }
+    },
+    "/ai/discover": {
+      "post": {
+        "summary": "Gemini watch finder",
+        "description": "AI selects IDs from an actual Supabase catalog; backend re-verifies records, returns explanations and product cards.",
+        "responses": {
+          "200": {
+            "description": "Standard {success:true,data:...} response"
+          },
+          "422": {
+            "description": "Validation error"
+          }
+        }
+      }
     }
   }
 }

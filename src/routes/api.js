@@ -10,7 +10,7 @@ import { verifyMayaWebhook } from '../services/webhook.js';
 const r=Router();
 const uuid=z.string().uuid();
 const money=z.number().finite().nonnegative().max(99999999);
-const ship=z.object({recipient:z.string().min(2).max(120),phone:z.string().min(7).max(25),address:z.string().min(8).max(250),city:z.string().min(2).max(80),province:z.string().min(2).max(80),postal_code:z.string().min(4).max(12)}).strict();
+const ship=z.object({recipient:z.string().min(2).max(120),phone:z.string().min(7).max(25),address:z.string().min(5).max(250),city:z.string().min(2).max(80),province:z.string().min(2).max(80),postal_code:z.string().min(4).max(12)}).strict();
 const productSchema=z.object({sku:z.string().min(2).max(60),name:z.string().min(2).max(150),description:z.string().max(3000).default(''),category_id:uuid,price:money,stock:z.number().int().min(0),active:z.boolean().default(true),image_url:z.string().url().nullable().optional(),model_number:z.string().max(100).nullable().optional(),series:z.string().max(100).nullable().optional(),movement:z.enum(['Quartz','Digital','Solar','Automatic']).nullable().optional(),water_resistance_m:z.number().int().min(0).default(0),strap_material:z.string().max(80).nullable().optional(),warranty_months:z.number().int().min(0).max(120).default(12)}).strict();
 const couponSchema=z.object({code:z.string().min(3).max(40),type:z.enum(['percent','fixed']),value:z.number().positive(),minimum_spend:money.default(0),max_uses:z.number().int().positive().nullable().optional(),per_customer_limit:z.number().int().positive().default(1),expires_at:z.string().datetime({offset:true}).nullable().optional(),active:z.boolean().default(true)}).strict().refine(x=>x.type!=='percent'||x.value<=100);
 const dbError = (error) => {
@@ -84,7 +84,7 @@ r.post('/checkout',auth,wrap(async(req,res)=>{
   throw e;
  }
 }));
-r.get('/orders',auth,wrap(async(req,res)=>{const x=z.object({page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(20)}).parse(req.query);const {data,error,count}=await db.from('orders').select('id,status,total,created_at,checkout_url',{count:'exact'}).eq('user_id',req.user.id).order('created_at',{ascending:false}).range((x.page-1)*x.limit,x.page*x.limit-1);dbError(error);ok(res,data,{total:count||0,page:x.page,limit:x.limit})}));
+r.get('/orders',auth,wrap(async(req,res)=>{const x=z.object({page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(20)}).parse(req.query);const {data,error,count}=await db.from('orders').select('id,status,total,created_at,checkout_url,payment_method,cod_collected',{count:'exact'}).eq('user_id',req.user.id).order('created_at',{ascending:false}).range((x.page-1)*x.limit,x.page*x.limit-1);dbError(error);ok(res,data,{total:count||0,page:x.page,limit:x.limit})}));
 r.get('/orders/:id',auth,wrap(async(req,res)=>{const order=await selectOrder(uuid.parse(req.params.id));if(!order||order.user_id!==req.user.id)fail(404,'NOT_FOUND','Order not found');ok(res,order)}));
 r.post('/orders/:id/cancel',auth,wrap(async(req,res)=>{const order=await selectOrder(uuid.parse(req.params.id));if(!order||order.user_id!==req.user.id)fail(404,'NOT_FOUND','Order not found');if(order.status!=='pending_payment')fail(409,'ILLEGAL_TRANSITION','Cannot cancel this order');if(order.checkout_id){const payment=await maya.getByReference(order.request_reference);if(['PAYMENT_SUCCESS','CAPTURED'].includes(payment.paymentStatus||payment.status)||payment.isPaid)fail(409,'PAYMENT_ALREADY_COMPLETED','Payment already completed; contact support');}
  const {error}=await db.rpc('change_order_status',{p_order:order.id,p_new:'cancelled',p_actor:req.user.id,p_reason:'customer cancelled'});if(error)fail(409,'ILLEGAL_TRANSITION',error.message);ok(res,await selectOrder(order.id))}));
@@ -140,7 +140,63 @@ r.post('/admin/coupons',wrap(async(req,res)=>{const x=couponSchema.parse(req.bod
 r.patch('/admin/coupons/:id',wrap(async(req,res)=>{const x=couponSchema.partial().parse(req.body);if(x.code)x.code=x.code.toUpperCase();const {data,error}=await db.from('coupons').update(x).eq('id',uuid.parse(req.params.id)).select().maybeSingle();dbError(error);if(!data)fail(404,'NOT_FOUND','Coupon missing');ok(res,data)}));
 r.get('/admin/orders',wrap(async(req,res)=>{const x=z.object({status:z.string().optional(),page:z.coerce.number().int().min(1).default(1),limit:z.coerce.number().int().min(1).max(100).default(20)}).parse(req.query);let q=db.from('orders').select('*',{count:'exact'});if(x.status)q=q.eq('status',x.status);const {data,error,count}=await q.order('created_at',{ascending:false}).range((x.page-1)*x.limit,x.page*x.limit-1);dbError(error);ok(res,data,{total:count||0,page:x.page,limit:x.limit})}));
 r.get('/admin/orders/:id',wrap(async(req,res)=>{const v=await selectOrder(uuid.parse(req.params.id));if(!v)fail(404,'NOT_FOUND','Order missing');ok(res,v)}));
-r.patch('/admin/orders/:id/status',wrap(async(req,res)=>{const {status}=z.object({status:z.enum(['processing','shipped','delivered'])}).strict().parse(req.body);const id=uuid.parse(req.params.id);const {error}=await db.rpc('change_order_status',{p_order:id,p_new:status,p_actor:req.user.id,p_reason:'admin fulfillment'});if(error)fail(409,'ILLEGAL_TRANSITION','Invalid order status change');ok(res,await selectOrder(id))}));
+
+r.patch(
+  "/admin/orders/:id/status",
+  auth,
+  admin,
+  wrap(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+
+    const { status } = z.object({
+      status: z.enum([
+        "processing",
+        "shipped",
+        "delivered",
+        "cancelled",
+      ]),
+    }).strict().parse(req.body);
+
+    const order = await selectOrder(id);
+
+    if (!order) {
+      fail(404, "NOT_FOUND", "Order not found");
+    }
+
+    // Keep Maya's payment lifecycle separate.
+    if (
+      order.payment_method === "maya" &&
+      status === "cancelled"
+    ) {
+      fail(
+        409,
+        "MAYA_RECONCILIATION_REQUIRED",
+        "Use the existing Maya payment workflow"
+      );
+    }
+
+    const { error } = await db.rpc(
+      "change_order_status",
+      {
+        p_order: id,
+        p_new: status,
+        p_actor: req.user.id,
+        p_reason: "Administrator order management",
+      }
+    );
+
+    if (error) {
+      fail(
+        409,
+        "ILLEGAL_TRANSITION",
+        "Order status cannot be changed this way"
+      );
+    }
+
+    ok(res, await selectOrder(id));
+  })
+);
+
 r.post('/admin/orders/:id/reconcile',wrap(async(req,res)=>{const order=await selectOrder(uuid.parse(req.params.id));if(!order)fail(404,'NOT_FOUND','Order not found');const outcome=await reconcile(order,'admin reconciliation');ok(res,{outcome,order:await selectOrder(order.id)})}));
 r.post('/admin/orders/expire',wrap(async(req,res)=>{const orders=result(await db.from('orders').select('id').eq('status','pending_payment').lt('expires_at',new Date().toISOString()).limit(100));const outcomes=[];for(const row of orders){const order=await selectOrder(row.id);try{if(order.checkout_id)await reconcile(order,'expiry reconciliation');const after=await selectOrder(row.id);if(after.status==='pending_payment'){
  // Safety: gateway must be checked before releasing any reservation tied to checkout
@@ -150,4 +206,318 @@ r.post('/admin/orders/expire',wrap(async(req,res)=>{const orders=result(await db
 r.get('/admin/dashboard',wrap(async(req,res)=>{const {data:orders,error}=await db.from('orders').select('status,total');dbError(error);const products=result(await db.from('products').select('id,name,sku,stock').lte('stock',5).eq('active',true));ok(res,{paid_orders:orders.filter(x=>['paid','processing','shipped','delivered'].includes(x.status)).length,gross_sales:orders.filter(x=>['paid','processing','shipped','delivered'].includes(x.status)).reduce((sum,x)=>sum+Number(x.total),0),pending_orders:orders.filter(x=>x.status==='pending_payment').length,low_stock:products})}));
 r.get('/admin/warranties',wrap(async(req,res)=>ok(res,result(await db.from('warranties').select('*').order('updated_at',{ascending:false})))));
 r.patch('/admin/warranties/:id',wrap(async(req,res)=>{const x=z.object({claim_status:z.enum(['approved','rejected','resolved']),serial_number:z.string().min(4).max(100).optional()}).strict().parse(req.body);const {data,error}=await db.from('warranties').update({...x,updated_at:new Date().toISOString()}).eq('id',uuid.parse(req.params.id)).select().maybeSingle();dbError(error);if(!data)fail(404,'NOT_FOUND','Warranty not found');ok(res,data)}));
+
+// ------------------------------------------
+// CUSTOMER PROFILE — SUPABASE PERSISTENCE
+// ------------------------------------------
+
+const profileUpdateSchema = z.object({
+  full_name: z.string().trim().min(2).max(100).optional(),
+  phone: z.string().max(25).nullable().optional(),
+  address: z.string().max(250).nullable().optional(),
+  city: z.string().max(80).nullable().optional(),
+  province: z.string().max(80).nullable().optional(),
+  postal_code: z.string().max(12).nullable().optional(),
+  photo_url: z.string().url().max(1000).nullable().optional(),
+}).strict();
+
+r.get("/profile", auth, wrap(async (req, res) => {
+  const profile = result(
+    await db
+      .from("profiles")
+      .select(
+        "id,email,full_name,role,phone,address," +
+        "city,province,postal_code,photo_url"
+      )
+      .eq("id", req.user.id)
+      .single()
+  );
+
+  ok(res, profile);
+}));
+
+r.patch("/profile", auth, wrap(async (req, res) => {
+  const data = profileUpdateSchema.parse(req.body);
+
+  if (Object.keys(data).length === 0) {
+    fail(422, "EMPTY_UPDATE", "No changes provided");
+  }
+
+  if (
+    data.photo_url &&
+    !data.photo_url.startsWith("https://")
+  ) {
+    fail(422, "INVALID_IMAGE", "Use an HTTPS image URL");
+  }
+
+  const { data: profile, error } = await db
+    .from("profiles")
+    .update(data)
+    .eq("id", req.user.id)
+    .select(
+      "id,email,full_name,role,phone,address," +
+      "city,province,postal_code,photo_url"
+    )
+    .single();
+
+  if (error) {
+    console.error("Profile update:", error.message);
+    fail(500, "PROFILE_UPDATE_FAILED",
+      "Could not save profile");
+  }
+
+  ok(res, profile);
+}));
+
+// ------------------------------------------
+// CASH ON DELIVERY CHECKOUT
+// ------------------------------------------
+
+r.post("/checkout/cod", auth, wrap(async (req, res) => {
+  const input = z.object({
+    shipping: ship,
+    coupon_code: z.string()
+      .max(40)
+      .optional(),
+  }).strict().parse(req.body);
+
+  const idempotencyKey =
+    req.get("Idempotency-Key");
+
+  if (
+    !idempotencyKey ||
+    idempotencyKey.length < 8 ||
+    idempotencyKey.length > 100
+  ) {
+    fail(
+      422,
+      "INVALID_IDEMPOTENCY_KEY",
+      "A valid Idempotency-Key is required"
+    );
+  }
+
+  const { data: reservation, error } = await db.rpc(
+    "place_cod_order",
+    {
+      p_user: req.user.id,
+      p_key: idempotencyKey,
+      p_shipping: input.shipping,
+      p_code: input.coupon_code || null,
+    }
+  );
+
+  if (error) {
+    console.error("COD checkout error:", error.message);
+
+    const message = error.message || "";
+
+    if (message.includes("OUT_OF_STOCK")) {
+      fail(409, "OUT_OF_STOCK",
+        "One or more watches are out of stock");
+    }
+
+    if (message.includes("EMPTY_CART")) {
+      fail(422, "EMPTY_CART",
+        "Your shopping cart is empty");
+    }
+
+    if (message.includes("IDEMPOTENCY_CONFLICT")) {
+      fail(409, "IDEMPOTENCY_CONFLICT",
+        "This checkout key belongs to another payment method");
+    }
+
+    if (message.includes("COUPON_")) {
+      fail(422, "INVALID_COUPON",
+        "The coupon cannot be applied");
+    }
+
+    fail(
+      500,
+      "COD_CHECKOUT_FAILED",
+      "Could not place your order"
+    );
+  }
+
+  const order = await selectOrder(reservation.order_id);
+
+  if (!order) {
+    fail(500, "ORDER_MISSING", "Order not found");
+  }
+
+  ok(res, {
+    order,
+    payment_method: "cod",
+    payment_status: "unpaid",
+    message:
+      "Order placed successfully. " +
+      "Payment is due on delivery.",
+    reused: reservation.reused,
+  }, undefined, reservation.reused ? 200 : 201);
+}));
+
+// ------------------------------------------
+// CUSTOMER COD CANCELLATION
+// ------------------------------------------
+
+r.post(
+  "/orders/:id/cancel-cod",
+  auth,
+  wrap(async (req, res) => {
+    const id = uuid.parse(req.params.id);
+    const order = await selectOrder(id);
+
+    if (
+      !order ||
+      order.user_id !== req.user.id
+    ) {
+      fail(404, "NOT_FOUND", "Order not found");
+    }
+
+    if (
+      order.payment_method !== "cod" ||
+      order.status !== "pending_cod"
+    ) {
+      fail(
+        409,
+        "ORDER_STATE_CONFLICT",
+        "This order can no longer be cancelled online"
+      );
+    }
+
+    const { error } = await db.rpc(
+      "change_order_status",
+      {
+        p_order: id,
+        p_new: "cancelled",
+        p_actor: req.user.id,
+        p_reason: "Customer cancelled COD order",
+      }
+    );
+
+    if (error) {
+      fail(409, "CANCEL_FAILED",
+        "Order cancellation failed");
+    }
+
+    ok(res, await selectOrder(id));
+  })
+);
+
+// ------------------------------------------
+// ADMIN: RECORD COD PAYMENT
+// ------------------------------------------
+
+r.post('/admin/orders/:id/collect-cod',auth,admin,wrap(async(req,res)=>{
+ const id=uuid.parse(req.params.id);
+ const input=z.object({receipt_number:z.string().trim().min(3).max(80)}).strict().parse(req.body);
+ const {data,error}=await db.rpc('record_cod_payment',{p_order:id,p_actor:req.user.id,p_receipt:input.receipt_number});
+ if(error){const code=error.message.includes('INVALID_COD_STATE')?'INVALID_COD_STATE':error.message.includes('RECEIPT_EXISTS')?'RECEIPT_EXISTS':'PAYMENT_RECORD_FAILED';fail(code==='PAYMENT_RECORD_FAILED'?500:409,code,'Unable to record COD collection');}
+ ok(res,{receipt:data,order:await selectOrder(id)});
+}));
+
+// ------------------------------------------
+// ADMIN: STORE ANALYTICS
+// ------------------------------------------
+
+r.get(
+  "/admin/store-analytics",
+  auth,
+  admin,
+  wrap(async (req, res) => {
+    const { data: orders, error } = await db
+      .from("orders")
+      .select(
+        "id,total,status,payment_method," +
+        "cod_collected,created_at"
+      );
+
+    if (error) {
+      fail(
+        500,
+        "ANALYTICS_ERROR",
+        "Could not load order statistics"
+      );
+    }
+
+    const all = orders || [];
+
+    const validOrders = all.filter(
+      (o) => ![
+        "cancelled",
+        "expired",
+        "payment_failed",
+      ].includes(o.status)
+    );
+
+    const mayaPaid = all.filter(
+      (o) =>
+        o.payment_method === "maya" &&
+        ["paid", "processing", "shipped", "delivered"]
+          .includes(o.status)
+    );
+
+    const codCollected = all.filter(
+      (o) =>
+        o.payment_method === "cod" &&
+        o.cod_collected === true
+    );
+
+    const total = (rows) =>
+      Number(
+        rows.reduce(
+          (sum, row) => sum + Number(row.total),
+          0
+        ).toFixed(2)
+      );
+
+    const byStatus = all.reduce((acc, row) => {
+      acc[row.status] = (acc[row.status] || 0) + 1;
+      return acc;
+    }, {});
+
+    const { data: lowStock, error: productError } =
+      await db
+        .from("products")
+        .select("id,name,sku,stock")
+        .eq("active", true)
+        .lte("stock", 5)
+        .order("stock", { ascending: true });
+
+    if (productError) {
+      fail(
+        500,
+        "ANALYTICS_ERROR",
+        "Could not load inventory statistics"
+      );
+    }
+
+    ok(res, {
+      total_orders: all.length,
+      active_orders: validOrders.length,
+      pending_cod: byStatus.pending_cod || 0,
+      processing: byStatus.processing || 0,
+      shipped: byStatus.shipped || 0,
+      delivered: byStatus.delivered || 0,
+
+      gross_order_value: total(validOrders),
+
+      collected_revenue: total([
+        ...mayaPaid,
+        ...codCollected,
+      ]),
+
+      uncollected_cod: total(
+        validOrders.filter(
+          (o) =>
+            o.payment_method === "cod" &&
+            !o.cod_collected
+        )
+      ),
+
+      by_status: byStatus,
+      low_stock: lowStock || [],
+    });
+  })
+);
+
 export default r;
